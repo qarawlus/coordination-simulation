@@ -125,7 +125,7 @@ class FlowSimulator:
             # Update metrics for the dropped flow
             self.params.metrics.dropped_flow(flow)
             return
-        
+
         # set current sf of flow
         sf = sfc[flow.current_position]
         flow.current_sf = sf
@@ -136,7 +136,7 @@ class FlowSimulator:
 
         if flow_forwarded:
             log.info("Flow {} STARTED ARRIVING at node {} for processing. Time: {}"
-                 .format(flow.flow_id, flow.current_node_id, self.env.now))
+                     .format(flow.flow_id, flow.current_node_id, self.env.now))
             yield self.env.process(self.process_flow(flow, sfc))
 
     def get_next_node(self, flow, sf):
