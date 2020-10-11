@@ -70,8 +70,12 @@ class FlowSimulator:
             if self.params.eg_nodes:
                 flow_egress_node = random.choice(self.params.eg_nodes)
             # Generate flow based on given params
+            if node_id == "pop3":
+                ttl = 50
+            else:
+                ttl = 50
             flow = Flow(str(self.total_flow_count), flow_sfc, flow_dr, flow_size, creation_time,
-                        current_node_id=node_id, egress_node_id=flow_egress_node)
+                        current_node_id=node_id, egress_node_id=flow_egress_node, ttl=ttl)
             # Update metrics for the generated flow
             self.params.metrics.generated_flow(flow, node_id)
             # Generate flows and schedule them at ingress node
@@ -114,18 +118,26 @@ class FlowSimulator:
         instead of pass_flow(). The position of the flow within the SFC is determined using current_position
         attribute of the flow object.
         """
-
+        # Check if TTL is above zero to make sure flow is still relevant
+        if flow.ttl <= 0:
+            log.info(f"Flow {flow.flow_id} passed TTL! Dropping flow")
+            # del self.flow_triggers[flow.flow_id]
+            # Update metrics for the dropped flow
+            self.params.metrics.dropped_flow(flow)
+            return
+        
         # set current sf of flow
         sf = sfc[flow.current_position]
         flow.current_sf = sf
         self.params.metrics.add_requesting_flow(flow)
 
         next_node = self.get_next_node(flow, sf)
-        yield self.env.process(self.forward_flow(flow, next_node))
+        flow_forwarded = yield self.env.process(self.forward_flow(flow, next_node))
 
-        log.info("Flow {} STARTED ARRIVING at node {} for processing. Time: {}"
+        if flow_forwarded:
+            log.info("Flow {} STARTED ARRIVING at node {} for processing. Time: {}"
                  .format(flow.flow_id, flow.current_node_id, self.env.now))
-        yield self.env.process(self.process_flow(flow, sfc))
+            yield self.env.process(self.process_flow(flow, sfc))
 
     def get_next_node(self, flow, sf):
         """
@@ -166,8 +178,8 @@ class FlowSimulator:
             log.info(f"No node to forward flow {flow.flow_id} to. Dropping it")
             # Update metrics for the dropped flow
             self.params.metrics.dropped_flow(flow)
-            return
-
+            return False
+        flow.last_node_id = flow.current_node_id
         path_delay = 0
         if flow.current_node_id != next_node:
             path_delay = self.params.network.graph['shortest_paths'][(flow.current_node_id, next_node)][1]
@@ -175,14 +187,19 @@ class FlowSimulator:
         # Metrics calculation for path delay. Flow's end2end delay is also incremented.
         self.params.metrics.add_path_delay(path_delay)
         flow.end2end_delay += path_delay
+        # deduct path_delay from TTL
+        flow.ttl -= path_delay
+
         if flow.current_node_id == next_node:
             assert path_delay == 0, "While Forwarding the flow, the Current and Next node same, yet path_delay != 0"
             log.info("Flow {} will stay in node {}. Time: {}.".format(flow.flow_id, flow.current_node_id, self.env.now))
+            return True
         else:
             log.info("Flow {} will leave node {} towards node {}. Time {}"
                      .format(flow.flow_id, flow.current_node_id, next_node, self.env.now))
             yield self.env.timeout(path_delay)
             flow.current_node_id = next_node
+            return True
 
     def process_flow(self, flow, sfc):
         """
@@ -205,6 +222,8 @@ class FlowSimulator:
             # Add the delay to the flow's end2end delay
             self.params.metrics.add_processing_delay(processing_delay)
             flow.end2end_delay += processing_delay
+            # Deduct processing delay from flow TTL
+            flow.ttl -= processing_delay
 
             # Calculate the demanded capacity when the flow is processed at this node
             demanded_total_capacity = 0.0
@@ -312,6 +331,12 @@ class FlowSimulator:
         """
         Process the flow at the requested SF of the current node.
         """
+        if flow.ttl <= 0:
+            log.info(f"Flow {flow.flow_id} passed TTL! Dropping flow")
+            # del self.flow_triggers[flow.flow_id]
+            # Update metrics for the dropped flow
+            self.params.metrics.dropped_flow(flow)
+            return False
         # Update metrics for the processed flow
         self.params.metrics.completed_flow()
         self.params.metrics.add_end2end_delay(flow.end2end_delay)
