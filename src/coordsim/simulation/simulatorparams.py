@@ -71,6 +71,9 @@ class SimulatorParams:
         # The duration of a run in the simulator's interface
         self.run_duration = config['run_duration']
 
+        # TTL choices: the list of TTLs to select for flows arriving at the network. default to 50 if not defined
+        self.ttl_choices = config.get('ttl_choices', [50])
+
         self.use_states = False
         self.states = {}
         self.in_init_state = True
